@@ -1,0 +1,21 @@
+node_name: jetson
+serial:
+  device: auto
+  match: ""
+  baud: 57600
+  reconnect_initial: 0.5
+  reconnect_max: 5.0
+protocol:
+  max_payload: 256
+  heartbeat_interval: 1.0
+  disconnect_after: 3.0
+  degraded_rtt_ms: 500.0
+  degraded_loss: 0.20
+  loss_window: 30
+  ack_timeout: 0.3
+  max_retries: 3
+  tx_queue_size: 256
+socket:
+  path: /run/sik-link/sik-link.sock
+  mode: 432  # 0660 in decimal
+log_level: INFO

@@ -1,0 +1,21 @@
+[Unit]
+Description=SiK transparent serial link daemon
+After=local-fs.target
+
+[Service]
+Type=simple
+User=sik-link
+Group=sik-link
+SupplementaryGroups=dialout
+RuntimeDirectory=sik-link
+RuntimeDirectoryMode=0755
+ExecStart=/usr/local/bin/sik-link daemon --config /etc/sik-link/config.yaml
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
