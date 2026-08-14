@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-from typing import Any, Self
+from typing import Any
+
+from typing_extensions import Self
 
 from .daemon import read_packet, write_packet
 

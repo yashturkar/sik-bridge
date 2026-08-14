@@ -231,6 +231,7 @@ dependencies = [
     { name = "msgpack" },
     { name = "pyserial" },
     { name = "pyyaml" },
+    { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
@@ -244,6 +245,7 @@ requires-dist = [
     { name = "pyserial", specifier = ">=3.5,<4" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8,<9" },
     { name = "pyyaml", specifier = ">=6,<7" },
+    { name = "typing-extensions", specifier = ">=4.0,<5" },
 ]
 provides-extras = ["test"]
 
