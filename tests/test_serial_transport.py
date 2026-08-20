@@ -36,3 +36,26 @@ def test_serial_transport_over_pty():
         transport.stop()
         os.close(master)
         os.close(slave)
+
+
+def test_control_evicts_bulk_and_latest_replaces_queued_value():
+    transport = SerialTransport(SerialConfig(), 2, lambda _: None, lambda *_: None)
+    transport._connected.set()
+    assert transport.send(b"old-state", priority=10, replace_key="state")
+    assert transport.send(b"bulk", priority=20)
+    assert transport.send(b"new-state", priority=10, replace_key="state")
+    assert transport.send(b"stop", priority=2)
+    assert transport._next_frame() == b"stop"
+    assert transport._next_frame() == b"new-state"
+
+
+def test_control_evicts_oldest_frame_among_equal_low_priorities():
+    transport = SerialTransport(SerialConfig(), 3, lambda _: None, lambda *_: None)
+    transport._connected.set()
+    assert transport.send(b"old-bulk", priority=20)
+    assert transport.send(b"new-bulk", priority=20)
+    assert transport.send(b"normal", priority=10)
+    assert transport.send(b"stop", priority=2)
+    assert transport._next_frame() == b"stop"
+    assert transport._next_frame() == b"normal"
+    assert transport._next_frame() == b"new-bulk"

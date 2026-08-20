@@ -20,7 +20,7 @@ def make_engine(clock, outgoing, events, **overrides):
     config = ProtocolConfig(**overrides)
     return ProtocolEngine(
         config,
-        lambda data, priority: outgoing.append((priority, data)) or True,
+        lambda data, priority, _key=None: outgoing.append((priority, data)) or True,
         lambda name, payload: events.append((name, payload)),
         clock=clock,
         wall_clock=lambda: 1000.0,
@@ -66,6 +66,7 @@ def test_reliable_send_retries_then_times_out():
     clock = Clock()
     outgoing, events = deque(), []
     engine = make_engine(clock, outgoing, events, ack_timeout=0.3, max_retries=2)
+    engine.metrics.last_valid_rx = clock()
     engine.send_user("x", 1, reliable=True, context=5)
     for _ in range(3):
         clock.advance(0.31)
@@ -95,8 +96,22 @@ def test_sequence_wraps():
     clock = Clock()
     outgoing = deque()
     engine = ProtocolEngine(
-        ProtocolConfig(), lambda data, priority: outgoing.append(data) or True, lambda *_: None,
+        ProtocolConfig(), lambda data, priority, _key=None: outgoing.append(data) or True, lambda *_: None,
         clock=clock, initial_seq=0xFFFF,
     )
     assert engine.send_user("x", 1) == 0xFFFF
     assert engine.send_user("x", 2) == 0
+
+
+def test_disconnect_fails_pending_reliable_send():
+    clock = Clock()
+    outgoing, events = deque(), []
+    engine = make_engine(clock, outgoing, events)
+    engine.metrics.last_valid_rx = clock()
+    engine.send_user("command", {"op": "stop"}, reliable=True, context="stop")
+    engine.tick()
+    clock.advance(3.1)
+    engine.tick()
+    result = [payload for name, payload in events if name == "send_result"][-1]
+    assert result["context"] == "stop"
+    assert result["error"] == "disconnected"

@@ -33,6 +33,10 @@ class LinkMetrics:
     reliable_timeouts: int = 0
     serial_disconnects: int = 0
     tx_queue_depth: int = 0
+    tx_dropped_frames: int = 0
+    tx_evicted_frames: int = 0
+    tx_coalesced_frames: int = 0
+    tx_discarded_frames: int = 0
     heartbeat_results: deque[bool] = field(default_factory=lambda: deque(maxlen=30), repr=False)
 
     @property

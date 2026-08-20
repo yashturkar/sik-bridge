@@ -33,7 +33,8 @@ def test_status_subscribe_and_unreliable_send(tmp_path: Path):
                 assert status["state"] == "DISCONNECTED"
                 await client.subscribe(["robot_status"], status=True)
                 sent = await client.send("command", {"go": True}, reliable=False)
-                assert sent["ok"] is True
+                assert sent["ok"] is False
+                assert "disconnected" in sent["error"]
                 daemon._event("message", {"topic": "robot_status", "data": {"battery": 80}, "seq": 1})
                 event = await asyncio.wait_for(anext(client.events()), 1)
                 assert event["topic"] == "robot_status"
@@ -85,6 +86,10 @@ def test_two_daemons_exchange_reliable_message_over_virtual_serial(tmp_path: Pat
                 str(tmp_path / "b.sock")
             ) as client_b:
                 await client_b.subscribe(["commands"], status=False)
+                for _ in range(100):
+                    if (await client_a.status())["state"] != "DISCONNECTED":
+                        break
+                    await asyncio.sleep(0.01)
                 result = await asyncio.wait_for(client_a.send("commands", {"go": True}, reliable=True), 1)
                 event = await asyncio.wait_for(anext(client_b.events()), 1)
                 assert result["ok"] is True

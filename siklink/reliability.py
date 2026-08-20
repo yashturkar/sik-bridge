@@ -13,6 +13,7 @@ class PendingSend:
     deadline: float
     retries_left: int
     request_context: Any = None
+    priority: int = 10
 
 
 class DuplicateCache:

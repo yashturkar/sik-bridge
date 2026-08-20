@@ -53,8 +53,14 @@ class SikLinkClient:
             await write_packet(self.writer, {"id": request_id, "op": op, **values})
         return await future
 
-    async def send(self, topic: str, data: Any, reliable: bool = False) -> dict[str, Any]:
-        return await self._request("send", topic=topic, data=data, reliable=reliable)
+    async def send(
+        self, topic: str, data: Any, reliable: bool = False,
+        *, traffic_class: str = "normal", latest: bool = False,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "send", topic=topic, data=data, reliable=reliable,
+            traffic_class=traffic_class, latest=latest,
+        )
 
     async def status(self) -> dict[str, Any]:
         response = await self._request("status")

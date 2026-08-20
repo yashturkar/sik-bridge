@@ -22,7 +22,7 @@ from .metrics import LinkMetrics
 from .reliability import DuplicateCache, PendingSend
 
 LOG = logging.getLogger(__name__)
-Emit = Callable[[bytes, int], bool]
+Emit = Callable[[bytes, int, str | None], bool]
 Event = Callable[[str, dict[str, Any]], None]
 
 
@@ -60,19 +60,30 @@ class ProtocolEngine:
         self._seq = (self._seq + 1) & 0xFFFF
         return seq
 
-    def _send_frame(self, frame: Frame, priority: int = 10) -> tuple[bool, bytes]:
+    def _send_frame(
+        self, frame: Frame, priority: int = 10, replace_key: str | None = None,
+    ) -> tuple[bool, bytes]:
         encoded = encode_frame(frame, self.config.max_payload)
-        accepted = self.emit(encoded, priority)
+        accepted = self.emit(encoded, priority, replace_key)
         if accepted:
             self.metrics.tx_frames += 1
             self.metrics.tx_bytes += len(encoded)
         return accepted, encoded
 
-    def send_user(self, topic: str, data: Any, reliable: bool = False, context: Any = None) -> int:
+    def send_user(
+        self, topic: str, data: Any, reliable: bool = False, context: Any = None,
+        *, priority: int = 10, latest: bool = False,
+    ) -> int:
+        if reliable and latest:
+            raise ValueError("reliable messages cannot use latest-value replacement")
         seq = self._next_seq()
         flags = ACK_REQUIRED if reliable else 0
         frame = Frame(MessageType.USER_MESSAGE, flags, seq, pack_user_message(topic, data))
-        accepted, encoded = self._send_frame(frame)
+        owner = context[0] if isinstance(context, tuple) and context else "anonymous"
+        accepted, encoded = self._send_frame(
+            frame, priority=priority,
+            replace_key=f"user:{owner}:{topic}" if latest else None,
+        )
         if not accepted:
             raise BufferError("transmit queue is full")
         if reliable:
@@ -81,6 +92,7 @@ class ProtocolEngine:
                 self.clock() + self.config.ack_timeout,
                 self.config.max_retries,
                 context,
+                priority,
             )
         else:
             self.event("send_result", {"seq": seq, "ok": True, "reliable": False, "context": context})
@@ -199,7 +211,7 @@ class ProtocolEngine:
             if now < pending.deadline:
                 continue
             if pending.retries_left > 0:
-                accepted = self.emit(pending.frame, 5)
+                accepted = self.emit(pending.frame, min(5, pending.priority), None)
                 pending.retries_left -= 1
                 pending.deadline = now + self.config.ack_timeout
                 if accepted:
@@ -213,8 +225,18 @@ class ProtocolEngine:
                                              "context": pending.request_context, "error": "timeout"})
         state = self.status(now)["state"]
         if state != self._last_state:
+            if state == "DISCONNECTED":
+                self.fail_pending("disconnected")
             self._last_state = state
             self.event("link_status", self.status(now))
+
+    def fail_pending(self, error: str) -> None:
+        for seq, pending in list(self._pending.items()):
+            self.event("send_result", {
+                "seq": seq, "ok": False, "reliable": True,
+                "context": pending.request_context, "error": error,
+            })
+        self._pending.clear()
 
     def _expire_heartbeats(self, now: float) -> None:
         cutoff = now - self.config.heartbeat_interval

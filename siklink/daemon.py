@@ -68,10 +68,18 @@ class SikLinkDaemon:
         )
         self.engine = ProtocolEngine(config.protocol, self._emit, self._event)
 
-    def _emit(self, data: bytes, priority: int) -> bool:
-        accepted = self.transport.send(data, priority)
-        self.engine.metrics.tx_queue_depth = self.transport.queue_depth
+    def _emit(self, data: bytes, priority: int, replace_key: str | None = None) -> bool:
+        accepted = self.transport.send(data, priority, replace_key)
+        self._sync_transport_metrics()
         return accepted
+
+    def _sync_transport_metrics(self) -> None:
+        metrics = self.engine.metrics
+        metrics.tx_queue_depth = self.transport.queue_depth
+        metrics.tx_dropped_frames = self.transport.dropped_frames
+        metrics.tx_evicted_frames = self.transport.evicted_frames
+        metrics.tx_coalesced_frames = self.transport.coalesced_frames
+        metrics.tx_discarded_frames = self.transport.discarded_frames
 
     def _serial_state(self, connected: bool, device: str | None, error: str | None) -> None:
         previous = self.engine.metrics.serial_connected
@@ -79,9 +87,13 @@ class SikLinkDaemon:
         self.engine.metrics.serial_device = device
         if previous and not connected:
             self.engine.metrics.serial_disconnects += 1
+            self.transport.discard_application()
+            self.engine.fail_pending("serial disconnected")
         self._event("serial_status", {"connected": connected, "device": device, "error": error})
 
     def _event(self, name: str, payload: dict[str, Any]) -> None:
+        if name == "link_status" and payload.get("state") == "DISCONNECTED":
+            self.transport.discard_application()
         context = payload.pop("context", None)
         if name == "send_result" and context is not None:
             peer_id, request_id = context
@@ -132,7 +144,7 @@ class SikLinkDaemon:
 
     async def _ticker(self) -> None:
         while True:
-            self.engine.metrics.tx_queue_depth = self.transport.queue_depth
+            self._sync_transport_metrics()
             self.engine.tick()
             await asyncio.sleep(0.05)
 
@@ -173,9 +185,16 @@ class SikLinkDaemon:
             await peer.send({"id": request_id, "ok": True})
         elif op == "send":
             try:
+                traffic_class = request.get("traffic_class", "normal")
+                priorities = {"control": 2, "normal": 10, "bulk": 20}
+                if traffic_class not in priorities:
+                    raise ValueError("traffic_class must be control, normal, or bulk")
+                if self.engine.status().get("state") == "DISCONNECTED":
+                    raise BufferError("RF link is disconnected")
                 self.engine.send_user(
                     request["topic"], request.get("data"), bool(request.get("reliable", False)),
-                    (peer.peer_id, request_id),
+                    (peer.peer_id, request_id), priority=priorities[traffic_class],
+                    latest=bool(request.get("latest", False)),
                 )
             except (BufferError, KeyError, TypeError, ValueError) as exc:
                 await peer.send({"id": request_id, "ok": False, "error": str(exc)})

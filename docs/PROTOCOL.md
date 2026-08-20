@@ -114,8 +114,22 @@ Request:
 
 ```text
 {"id": 1, "op": "send", "topic": "illumination",
- "data": {"intensity": 0.65}, "reliable": true}
+ "data": {"intensity": 0.65}, "reliable": true,
+ "traffic_class": "control", "latest": false}
 ```
+
+`traffic_class` is a local scheduling hint and is not encoded on the radio
+wire. It is one of `control`, `normal` (the default), or `bulk`. Protocol
+ACK/NACK and heartbeat frames always outrank all three application classes.
+When the transmit queue is full, an incoming higher-priority frame evicts the
+oldest lowest-priority frame. `latest=true` may be used only with unreliable
+messages and replaces an unsent message from the same topic, which is useful
+for snapshots whose older values have no value after a delay.
+
+Application sends fail while RF state is `DISCONNECTED`; the daemon continues
+to send protocol heartbeats. Queued application frames and pending reliable
+sends are discarded on an RF disconnect so stale commands or telemetry cannot
+appear after reconnection.
 
 Successful unreliable response:
 
@@ -158,6 +172,8 @@ Request and response:
 | `retries`, `duplicates`, `reliable_timeouts` | int | Reliability counters. |
 | `serial_disconnects` | int | Transitions from an open to unavailable serial device. |
 | `tx_queue_depth` | int | Frames currently awaiting serial transmission. |
+| `tx_dropped_frames`, `tx_evicted_frames` | int | Frames rejected or displaced by priority scheduling. |
+| `tx_coalesced_frames`, `tx_discarded_frames` | int | Latest-value replacements and frames purged on disconnect. |
 
 ### Subscribe and events
 

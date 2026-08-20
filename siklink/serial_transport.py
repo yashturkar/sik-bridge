@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import glob
+import heapq
 import itertools
 import logging
-import queue
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -46,15 +46,22 @@ class SerialTransport:
         self.config = config
         self.on_data = on_data
         self.on_state = on_state
-        self._queue: queue.PriorityQueue[tuple[int, int, bytes]] = queue.PriorityQueue(queue_size)
+        self._queue_size = queue_size
+        self._queue: list[tuple[int, int, bytes, str | None]] = []
+        self._queue_lock = threading.Lock()
         self._counter = itertools.count()
+        self.dropped_frames = 0
+        self.evicted_frames = 0
+        self.coalesced_frames = 0
+        self.discarded_frames = 0
         self._stop = threading.Event()
         self._connected = threading.Event()
         self._thread: threading.Thread | None = None
 
     @property
     def queue_depth(self) -> int:
-        return self._queue.qsize()
+        with self._queue_lock:
+            return len(self._queue)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -68,14 +75,49 @@ class SerialTransport:
         if self._thread:
             self._thread.join(timeout=max(2.0, self.config.read_timeout + 1.0))
 
-    def send(self, data: bytes, priority: int = 10) -> bool:
+    def send(self, data: bytes, priority: int = 10, replace_key: str | None = None) -> bool:
         if not self._connected.is_set():
             return False
-        try:
-            self._queue.put_nowait((priority, next(self._counter), data))
+        with self._queue_lock:
+            if replace_key is not None:
+                for index, item in enumerate(self._queue):
+                    if item[3] == replace_key:
+                        self._queue[index] = (priority, item[1], data, replace_key)
+                        heapq.heapify(self._queue)
+                        self.coalesced_frames += 1
+                        return True
+            item = (priority, next(self._counter), data, replace_key)
+            if len(self._queue) < self._queue_size:
+                heapq.heappush(self._queue, item)
+                return True
+            worst_priority = max(queued[0] for queued in self._queue)
+            worst_index = min(
+                (index for index, queued in enumerate(self._queue) if queued[0] == worst_priority),
+                key=lambda index: self._queue[index][1],
+            )
+            if self._queue[worst_index][0] <= priority:
+                self.dropped_frames += 1
+                return False
+            self._queue[worst_index] = item
+            heapq.heapify(self._queue)
+            self.evicted_frames += 1
             return True
-        except queue.Full:
-            return False
+
+    def discard_application(self) -> int:
+        """Discard queued application frames while retaining protocol control frames."""
+        with self._queue_lock:
+            before = len(self._queue)
+            self._queue = [item for item in self._queue if item[0] == 0]
+            heapq.heapify(self._queue)
+            discarded = before - len(self._queue)
+            self.discarded_frames += discarded
+            return discarded
+
+    def _next_frame(self) -> bytes | None:
+        with self._queue_lock:
+            if not self._queue:
+                return None
+            return heapq.heappop(self._queue)[2]
 
     def _run(self) -> None:
         delay = self.config.reconnect_initial
@@ -97,12 +139,9 @@ class SerialTransport:
 
     def _connected_loop(self, port: serial.Serial) -> None:
         while not self._stop.is_set():
-            try:
-                while True:
-                    _, _, data = self._queue.get_nowait()
-                    port.write(data)
-            except queue.Empty:
-                pass
+            data = self._next_frame()
+            if data is not None:
+                port.write(data)
             waiting = port.in_waiting
             data = port.read(waiting or 1)
             if data:
