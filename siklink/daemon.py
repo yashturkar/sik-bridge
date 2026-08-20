@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import struct
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -58,10 +59,11 @@ class SikLinkDaemon:
         self._peer_counter = 0
         self._server: asyncio.AbstractServer | None = None
         self._stop = asyncio.Event()
+        self._serial_recovery_deadline: float | None = None
         self.transport = SerialTransport(
             config.serial,
             config.protocol.tx_queue_size,
-            lambda data: self.loop.call_soon_threadsafe(self.engine.receive, data),
+            lambda data: self.loop.call_soon_threadsafe(self._receive, data),
             lambda connected, device, error: self.loop.call_soon_threadsafe(
                 self._serial_state, connected, device, error
             ),
@@ -81,14 +83,28 @@ class SikLinkDaemon:
         metrics.tx_coalesced_frames = self.transport.coalesced_frames
         metrics.tx_discarded_frames = self.transport.discarded_frames
 
+    def _receive(self, data: bytes) -> None:
+        self.engine.receive(data)
+        if self.engine.metrics.last_valid_rx is not None:
+            self._arm_serial_recovery()
+
+    def _arm_serial_recovery(self) -> None:
+        interval = self.config.serial.rf_silence_reopen_after
+        self._serial_recovery_deadline = None if interval == 0 else time.monotonic() + interval
+
     def _serial_state(self, connected: bool, device: str | None, error: str | None) -> None:
         previous = self.engine.metrics.serial_connected
         self.engine.metrics.serial_connected = connected
         self.engine.metrics.serial_device = device
+        if error:
+            self.engine.metrics.last_serial_error = error
+        if connected:
+            self._arm_serial_recovery()
         if previous and not connected:
             self.engine.metrics.serial_disconnects += 1
             self.transport.discard_application()
             self.engine.fail_pending("serial disconnected")
+            self.engine.reset_link()
         self._event("serial_status", {"connected": connected, "device": device, "error": error})
 
     def _event(self, name: str, payload: dict[str, Any]) -> None:
@@ -146,6 +162,18 @@ class SikLinkDaemon:
         while True:
             self._sync_transport_metrics()
             self.engine.tick()
+            deadline = self._serial_recovery_deadline
+            if (
+                deadline is not None
+                and self.engine.metrics.serial_connected
+                and self.engine.status().get("state") == "DISCONNECTED"
+                and time.monotonic() >= deadline
+            ):
+                age = self.engine.status().get("last_rx_age_s")
+                reason = "no valid RF frames received" if age is None else f"no valid RF frames for {age:.1f}s"
+                if self.transport.request_reconnect(reason):
+                    self.engine.metrics.serial_recoveries += 1
+                    self._arm_serial_recovery()
             await asyncio.sleep(0.05)
 
     async def _handle_peer(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

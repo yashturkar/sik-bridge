@@ -59,3 +59,34 @@ def test_control_evicts_oldest_frame_among_equal_low_priorities():
     assert transport._next_frame() == b"stop"
     assert transport._next_frame() == b"normal"
     assert transport._next_frame() == b"new-bulk"
+
+
+def test_requested_reconnect_closes_and_reopens_port():
+    master, slave = pty.openpty()
+    states = []
+    connected_twice = threading.Event()
+    transport = SerialTransport(
+        SerialConfig(
+            device=os.ttyname(slave), read_timeout=0.01,
+            reconnect_initial=0.01, reconnect_max=0.02,
+        ),
+        8,
+        lambda _: None,
+        lambda state, _device, error: (
+            states.append((state, error)),
+            connected_twice.set() if state and sum(value for value, _ in states) >= 2 else None,
+        ),
+    )
+    try:
+        transport.start()
+        deadline = time.monotonic() + 1
+        while not transport._connected.is_set() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert transport.request_reconnect("silent USB stream")
+        assert connected_twice.wait(1)
+        assert (False, "silent USB stream") in states
+        assert transport.forced_reconnects == 1
+    finally:
+        transport.stop()
+        os.close(master)
+        os.close(slave)

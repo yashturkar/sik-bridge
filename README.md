@@ -90,6 +90,11 @@ frame has arrived for three seconds. It is `DEGRADED` when the configured RTT or
 heartbeat-loss threshold is exceeded, and `CONNECTED` otherwise. Serial-port
 connection and radio-link state are reported separately.
 
+If an open USB serial device delivers no valid RF frames for 15 seconds, the
+daemon automatically closes and reopens it. This recovers FTDI/USB stalls that
+do not raise a normal pyserial disconnect. Configure the interval with
+`serial.rf_silence_reopen_after`, or set it to zero to disable forced reopening.
+
 ## End-to-end link test
 
 With both daemons running, start an echo client on the Jetson:

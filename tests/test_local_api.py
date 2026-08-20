@@ -105,3 +105,36 @@ def test_two_daemons_exchange_reliable_message_over_virtual_serial(tmp_path: Pat
                 os.close(descriptor)
 
     asyncio.run(scenario())
+
+
+def test_daemon_reopens_silent_serial_transport(tmp_path: Path):
+    async def scenario():
+        master, slave = pty.openpty()
+        config = AppConfig(
+            "test",
+            SerialConfig(
+                device=os.ttyname(slave), read_timeout=0.01,
+                reconnect_initial=0.01, reconnect_max=0.02,
+                rf_silence_reopen_after=0.08,
+            ),
+            ProtocolConfig(heartbeat_interval=0.02, disconnect_after=0.04),
+            SocketConfig(path=str(tmp_path / "silent.sock")),
+        )
+        daemon = SikLinkDaemon(config)
+        task = asyncio.create_task(daemon.run())
+        try:
+            for _ in range(100):
+                if daemon.engine.metrics.serial_disconnects:
+                    break
+                await asyncio.sleep(0.01)
+            assert daemon.engine.metrics.serial_recoveries >= 1
+            assert daemon.engine.metrics.serial_disconnects >= 1
+            assert daemon.engine.metrics.last_serial_error is not None
+            assert "no valid RF frames" in daemon.engine.metrics.last_serial_error
+        finally:
+            daemon.stop()
+            await asyncio.wait_for(task, 2)
+            os.close(master)
+            os.close(slave)
+
+    asyncio.run(scenario())

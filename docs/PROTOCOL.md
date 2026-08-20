@@ -96,6 +96,13 @@ Serial-device connection is separate from RF link state. A daemon can report
 `serial_connected=true` and `state=DISCONNECTED` when its local radio is open
 but no valid frames arrive from the remote radio.
 
+Some USB serial failures leave the device open while reads silently stop. When
+`serial.rf_silence_reopen_after` is nonzero (15 seconds by default), a daemon
+that remains RF-disconnected for that interval closes and reopens its serial
+port. Reopening resets partial decoder, heartbeat, RTT, and pending-delivery
+state without restarting the daemon or its local clients. Set the value to zero
+to disable this recovery loop.
+
 ## Local Unix-socket transport
 
 The default socket is `/run/sik-link/sik-link.sock`. Every local packet is:

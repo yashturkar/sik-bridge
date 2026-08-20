@@ -32,6 +32,8 @@ class LinkMetrics:
     duplicates: int = 0
     reliable_timeouts: int = 0
     serial_disconnects: int = 0
+    serial_recoveries: int = 0
+    last_serial_error: str | None = None
     tx_queue_depth: int = 0
     tx_dropped_frames: int = 0
     tx_evicted_frames: int = 0

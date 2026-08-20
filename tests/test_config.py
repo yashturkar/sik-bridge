@@ -18,3 +18,13 @@ def test_unknown_key_is_rejected(tmp_path: Path):
     path.write_text("node_name: base\nserial:\n  typo: true\n")
     with pytest.raises(ValueError, match="unknown serial"):
         load_config(path)
+
+
+def test_rf_silence_reopen_must_not_precede_disconnect(tmp_path: Path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "node_name: base\nserial:\n  rf_silence_reopen_after: 2\n"
+        "protocol:\n  disconnect_after: 3\n"
+    )
+    with pytest.raises(ValueError, match="rf_silence_reopen_after"):
+        load_config(path)

@@ -5,6 +5,8 @@ serial:
   baud: 57600
   reconnect_initial: 0.5
   reconnect_max: 5.0
+  # Reopen a USB serial port that remains open but stops delivering valid RF frames.
+  rf_silence_reopen_after: 15.0
 protocol:
   max_payload: 256
   heartbeat_interval: 1.0

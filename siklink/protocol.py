@@ -238,6 +238,16 @@ class ProtocolEngine:
             })
         self._pending.clear()
 
+    def reset_link(self) -> None:
+        """Forget state tied to a serial stream that is being reopened."""
+        self.decoder = FrameDecoder(self.config.max_payload)
+        self._heartbeat_pending.clear()
+        self.metrics.heartbeat_results.clear()
+        self.metrics.last_valid_rx = None
+        self.metrics.rtt_ms = None
+        self._last_rx_seq = None
+        self._last_state = None
+
     def _expire_heartbeats(self, now: float) -> None:
         cutoff = now - self.config.heartbeat_interval
         expired = [seq for seq, (sent, _) in self._heartbeat_pending.items() if sent <= cutoff]

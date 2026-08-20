@@ -54,8 +54,12 @@ class SerialTransport:
         self.evicted_frames = 0
         self.coalesced_frames = 0
         self.discarded_frames = 0
+        self.forced_reconnects = 0
         self._stop = threading.Event()
         self._connected = threading.Event()
+        self._reconnect = threading.Event()
+        self._reconnect_reason = ""
+        self._reconnect_lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
     @property
@@ -74,6 +78,17 @@ class SerialTransport:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=max(2.0, self.config.read_timeout + 1.0))
+
+    def request_reconnect(self, reason: str) -> bool:
+        """Ask the worker to close and reopen a connected serial device."""
+        if not self._connected.is_set() or self._stop.is_set():
+            return False
+        with self._reconnect_lock:
+            if self._reconnect.is_set():
+                return False
+            self._reconnect_reason = reason
+            self._reconnect.set()
+        return True
 
     def send(self, data: bytes, priority: int = 10, replace_key: str | None = None) -> bool:
         if not self._connected.is_set():
@@ -134,11 +149,21 @@ class SerialTransport:
                 self._connected.clear()
                 LOG.warning("serial unavailable: %s", exc)
                 self.on_state(False, None, str(exc))
+            else:
+                self._connected.clear()
+                if not self._stop.is_set():
+                    with self._reconnect_lock:
+                        reason = self._reconnect_reason or "serial reconnect requested"
+                        self._reconnect_reason = ""
+                    self.forced_reconnects += 1
+                    LOG.warning("reopening serial transport: %s", reason)
+                    self.on_state(False, None, reason)
+            self._reconnect.clear()
             if not self._stop.wait(delay):
                 delay = min(self.config.reconnect_max, max(self.config.reconnect_initial, delay * 2))
 
     def _connected_loop(self, port: serial.Serial) -> None:
-        while not self._stop.is_set():
+        while not self._stop.is_set() and not self._reconnect.is_set():
             data = self._next_frame()
             if data is not None:
                 port.write(data)

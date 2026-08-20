@@ -72,6 +72,12 @@ def _print_status(status: dict[str, Any]) -> None:
     print(f"RX age: {'unavailable' if age is None else f'{age:.2f} s'}")
     print(f"Frames: tx={status.get('tx_frames', 0)} rx={status.get('rx_frames', 0)}")
     print(f"Errors: crc={status.get('crc_errors', 0)} parser={status.get('parser_errors', 0)}")
+    print(
+        f"Recovery: port_reopens={status.get('serial_recoveries', 0)} "
+        f"serial_disconnects={status.get('serial_disconnects', 0)}"
+    )
+    if status.get("last_serial_error"):
+        print(f"Last serial event: {status['last_serial_error']}")
 
 
 async def _status(args: argparse.Namespace) -> None:

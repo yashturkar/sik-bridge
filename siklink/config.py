@@ -19,6 +19,7 @@ class SerialConfig:
     read_timeout: float = 0.1
     reconnect_initial: float = 0.5
     reconnect_max: float = 5.0
+    rf_silence_reopen_after: float = 15.0
 
 
 @dataclass(slots=True)
@@ -80,8 +81,18 @@ def load_config(path: str | Path) -> AppConfig:
     socket = _section(SocketConfig, raw.get("socket", {}), "socket")
     if not 1 <= protocol.max_payload <= HARD_MAX_PAYLOAD:
         raise ValueError(f"protocol.max_payload must be between 1 and {HARD_MAX_PAYLOAD}")
-    if serial.baud <= 0 or protocol.heartbeat_interval <= 0 or protocol.disconnect_after <= 0:
+    if (
+        serial.baud <= 0
+        or serial.read_timeout <= 0
+        or serial.reconnect_initial <= 0
+        or serial.reconnect_max <= 0
+        or serial.rf_silence_reopen_after < 0
+        or protocol.heartbeat_interval <= 0
+        or protocol.disconnect_after <= 0
+    ):
         raise ValueError("baud and timing values must be positive")
+    if 0 < serial.rf_silence_reopen_after < protocol.disconnect_after:
+        raise ValueError("serial.rf_silence_reopen_after must be zero or at least protocol.disconnect_after")
     if not 0 <= protocol.degraded_loss <= 1:
         raise ValueError("protocol.degraded_loss must be between 0 and 1")
     return AppConfig(node_name, serial, protocol, socket, str(raw.get("log_level", "INFO")).upper())
