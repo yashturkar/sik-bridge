@@ -84,12 +84,17 @@ was executed must define a separate application-level response topic.
 ## Heartbeat and status behavior
 
 Each daemon sends a heartbeat once per second and immediately ACKs valid remote
-heartbeats. Heartbeat replies provide RTT and rolling heartbeat-loss metrics.
+heartbeats. Base and vehicle configurations use different heartbeat phases so
+their half-duplex bursts do not remain synchronized. Replies have a separate,
+longer deadline than the transmit interval. Heartbeat replies provide RTT and
+rolling heartbeat-loss metrics.
 
 - `DISCONNECTED`: no valid radio frame has arrived yet or the last valid frame
   is at least `disconnect_after` seconds old (default 3 seconds).
-- `DEGRADED`: frames are current, but RTT exceeds `degraded_rtt_ms` (default 500)
-  or rolling heartbeat loss exceeds `degraded_loss` (default 0.20).
+- `DEGRADED`: frames are current, but RTT or rolling heartbeat loss has remained
+  beyond its configured threshold for the configured number of samples. A
+  separate healthy-sample count provides hysteresis before returning to
+  `CONNECTED`; startup does not degrade before `minimum_health_samples` exist.
 - `CONNECTED`: frames are current and neither degraded threshold is exceeded.
 
 Serial-device connection is separate from RF link state. A daemon can report
@@ -102,6 +107,13 @@ that remains RF-disconnected for that interval closes and reopens its serial
 port. Reopening resets partial decoder, heartbeat, RTT, and pending-delivery
 state without restarting the daemon or its local clients. Set the value to zero
 to disable this recovery loop.
+
+After `serial.usb_reset_after_reopens` unsuccessful tty-only reopen attempts,
+the daemon escalates to Linux `USBDEVFS_RESET` on the USB device that owns the
+configured tty. It resolves that leaf device through sysfs and never resets its
+parent hub. Install `udev/99-sik-link-ft230x.rules` with the supplied script so
+the unprivileged daemon can open that one FT230X USB device for reset. Reset
+successes and permission/device failures are reported in status.
 
 ## Local Unix-socket transport
 
@@ -173,11 +185,13 @@ Request and response:
 | `last_rx_age_s` | float or nil | Age of the last valid radio frame. |
 | `rtt_ms` | float or nil | Most recently measured heartbeat RTT. |
 | `heartbeat_loss` | float | Lost fraction in the configured rolling window, from 0 to 1. |
+| `heartbeat_samples` | int | Completed heartbeat samples currently in the rolling window. |
 | `tx_frames`, `rx_frames` | int | Valid protocol frames transmitted and received. |
 | `tx_bytes`, `rx_bytes` | int | Encoded transmit bytes and received payload bytes counted by the engine. |
 | `crc_errors`, `parser_errors` | int | Detected CRC and structural/payload errors. |
 | `retries`, `duplicates`, `reliable_timeouts` | int | Reliability counters. |
 | `serial_disconnects` | int | Transitions from an open to unavailable serial device. |
+| `usb_resets`, `usb_reset_failures` | int | Scoped FTDI recovery results. |
 | `tx_queue_depth` | int | Frames currently awaiting serial transmission. |
 | `tx_dropped_frames`, `tx_evicted_frames` | int | Frames rejected or displaced by priority scheduling. |
 | `tx_coalesced_frames`, `tx_discarded_frames` | int | Latest-value replacements and frames purged on disconnect. |

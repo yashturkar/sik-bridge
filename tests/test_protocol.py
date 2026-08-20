@@ -92,6 +92,39 @@ def test_heartbeat_calculates_rtt_and_connected_state():
     assert a.status()["state"] == LinkState.DISCONNECTED.value
 
 
+def test_heartbeat_reply_can_arrive_after_next_transmit_interval():
+    clock = Clock()
+    a_out, b_out = deque(), deque()
+    a = make_engine(clock, a_out, [], heartbeat_interval=1.0, heartbeat_reply_timeout=2.0)
+    b = make_engine(clock, b_out, [], heartbeat_interval=10.0, heartbeat_phase=10.0)
+    a.tick()
+    transfer(a_out, b)
+    clock.advance(1.2)
+    a.tick()
+    transfer(b_out, a)
+    assert a.metrics.heartbeat_loss == 0.0
+    assert round(a.metrics.rtt_ms) == 1200
+
+
+def test_degraded_state_requires_samples_and_hysteresis():
+    clock = Clock()
+    engine = make_engine(
+        clock, deque(), [], minimum_health_samples=3,
+        degraded_enter_samples=2, degraded_exit_samples=3,
+    )
+    engine.metrics.last_valid_rx = clock()
+    for result in (True, False, False, False):
+        engine._record_heartbeat(result)
+    assert engine.status()["state"] == LinkState.DEGRADED.value
+    for _ in range(2):
+        engine._record_heartbeat(True)
+    assert engine.status()["state"] == LinkState.DEGRADED.value
+    # Clear the rolling loss before counting three fully healthy samples.
+    for _ in range(35):
+        engine._record_heartbeat(True)
+    assert engine.status()["state"] == LinkState.CONNECTED.value
+
+
 def test_sequence_wraps():
     clock = Clock()
     outgoing = deque()

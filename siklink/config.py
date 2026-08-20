@@ -20,16 +20,23 @@ class SerialConfig:
     reconnect_initial: float = 0.5
     reconnect_max: float = 5.0
     rf_silence_reopen_after: float = 15.0
+    usb_reset_after_reopens: int = 1
+    usb_reset_settle_seconds: float = 1.0
 
 
 @dataclass(slots=True)
 class ProtocolConfig:
     max_payload: int = 256
     heartbeat_interval: float = 1.0
+    heartbeat_phase: float = 0.0
+    heartbeat_reply_timeout: float = 2.0
     disconnect_after: float = 3.0
     degraded_rtt_ms: float = 500.0
     degraded_loss: float = 0.20
     loss_window: int = 30
+    minimum_health_samples: int = 5
+    degraded_enter_samples: int = 3
+    degraded_exit_samples: int = 5
     ack_timeout: float = 0.3
     max_retries: int = 3
     duplicate_ttl: float = 10.0
@@ -87,12 +94,22 @@ def load_config(path: str | Path) -> AppConfig:
         or serial.reconnect_initial <= 0
         or serial.reconnect_max <= 0
         or serial.rf_silence_reopen_after < 0
+        or serial.usb_reset_after_reopens < 0
+        or serial.usb_reset_settle_seconds < 0
         or protocol.heartbeat_interval <= 0
+        or protocol.heartbeat_phase < 0
+        or protocol.heartbeat_reply_timeout <= protocol.heartbeat_interval
         or protocol.disconnect_after <= 0
+        or protocol.loss_window <= 0
+        or protocol.minimum_health_samples <= 0
+        or protocol.degraded_enter_samples <= 0
+        or protocol.degraded_exit_samples <= 0
     ):
-        raise ValueError("baud and timing values must be positive")
+        raise ValueError("serial and protocol timing/count values are invalid")
     if 0 < serial.rf_silence_reopen_after < protocol.disconnect_after:
         raise ValueError("serial.rf_silence_reopen_after must be zero or at least protocol.disconnect_after")
     if not 0 <= protocol.degraded_loss <= 1:
         raise ValueError("protocol.degraded_loss must be between 0 and 1")
+    if protocol.minimum_health_samples > protocol.loss_window:
+        raise ValueError("protocol.minimum_health_samples must not exceed loss_window")
     return AppConfig(node_name, serial, protocol, socket, str(raw.get("log_level", "INFO")).upper())

@@ -1,0 +1,4 @@
+# Permit the sik-link daemon and dialout operators to reset only FT230X USB
+# UART devices after a stalled bulk endpoint. Serial tty access remains governed
+# by the normal dialout rules.
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6015", GROUP="dialout", MODE="0660", TAG+="uaccess"

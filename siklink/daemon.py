@@ -60,6 +60,7 @@ class SikLinkDaemon:
         self._server: asyncio.AbstractServer | None = None
         self._stop = asyncio.Event()
         self._serial_recovery_deadline: float | None = None
+        self._silent_reopens_without_rx = 0
         self.transport = SerialTransport(
             config.serial,
             config.protocol.tx_queue_size,
@@ -82,15 +83,34 @@ class SikLinkDaemon:
         metrics.tx_evicted_frames = self.transport.evicted_frames
         metrics.tx_coalesced_frames = self.transport.coalesced_frames
         metrics.tx_discarded_frames = self.transport.discarded_frames
+        metrics.usb_resets = self.transport.usb_resets
+        metrics.usb_reset_failures = self.transport.usb_reset_failures
+        metrics.last_usb_reset_error = self.transport.last_usb_reset_error
 
     def _receive(self, data: bytes) -> None:
+        previous_valid_rx = self.engine.metrics.last_valid_rx
         self.engine.receive(data)
-        if self.engine.metrics.last_valid_rx is not None:
+        if self.engine.metrics.last_valid_rx != previous_valid_rx:
+            self._silent_reopens_without_rx = 0
             self._arm_serial_recovery()
 
     def _arm_serial_recovery(self) -> None:
         interval = self.config.serial.rf_silence_reopen_after
         self._serial_recovery_deadline = None if interval == 0 else time.monotonic() + interval
+
+    def _request_silent_recovery(self, age: float | None) -> bool:
+        """Escalate one silent-link recovery without ever targeting a parent hub."""
+        reason = "no valid RF frames received" if age is None else f"no valid RF frames for {age:.1f}s"
+        threshold = self.config.serial.usb_reset_after_reopens
+        reset_usb = threshold > 0 and self._silent_reopens_without_rx >= threshold
+        if reset_usb:
+            reason += "; escalating to scoped USB device reset"
+        if not self.transport.request_reconnect(reason, usb_reset=reset_usb):
+            return False
+        self.engine.metrics.serial_recoveries += 1
+        self._silent_reopens_without_rx = 0 if reset_usb else self._silent_reopens_without_rx + 1
+        self._arm_serial_recovery()
+        return True
 
     def _serial_state(self, connected: bool, device: str | None, error: str | None) -> None:
         previous = self.engine.metrics.serial_connected
@@ -170,10 +190,7 @@ class SikLinkDaemon:
                 and time.monotonic() >= deadline
             ):
                 age = self.engine.status().get("last_rx_age_s")
-                reason = "no valid RF frames received" if age is None else f"no valid RF frames for {age:.1f}s"
-                if self.transport.request_reconnect(reason):
-                    self.engine.metrics.serial_recoveries += 1
-                    self._arm_serial_recovery()
+                self._request_silent_recovery(age)
             await asyncio.sleep(0.05)
 
     async def _handle_peer(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

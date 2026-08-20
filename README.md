@@ -94,6 +94,16 @@ If an open USB serial device delivers no valid RF frames for 15 seconds, the
 daemon automatically closes and reopens it. This recovers FTDI/USB stalls that
 do not raise a normal pyserial disconnect. Configure the interval with
 `serial.rf_silence_reopen_after`, or set it to zero to disable forced reopening.
+If a tty-only reopen does not recover valid frames, the daemon can reset the
+individual FT230X device without resetting its parent hub. Install the required
+device permission once on each host:
+
+```sh
+./scripts/install-usb-reset-permissions.sh
+```
+
+The configured user must belong to `dialout`; reconnect the radio or reboot if
+an existing device node did not receive the updated rule immediately.
 
 ## End-to-end link test
 

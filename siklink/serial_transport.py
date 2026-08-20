@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import glob
 import heapq
 import itertools
 import logging
+import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -15,6 +17,34 @@ import serial
 from .config import SerialConfig
 
 LOG = logging.getLogger(__name__)
+USBDEVFS_RESET = ord("U") << 8 | 20
+
+
+def usb_device_node(
+    serial_device: str,
+    *,
+    sysfs_root: Path = Path("/sys"),
+    usb_root: Path = Path("/dev/bus/usb"),
+) -> str:
+    """Resolve a tty path to only its owning USB device node."""
+    tty_name = Path(serial_device).resolve().name
+    current = (sysfs_root / "class" / "tty" / tty_name / "device").resolve()
+    for candidate in (current, *current.parents):
+        busnum, devnum = candidate / "busnum", candidate / "devnum"
+        if busnum.is_file() and devnum.is_file():
+            return str(usb_root / f"{int(busnum.read_text()):03d}" / f"{int(devnum.read_text()):03d}")
+    raise FileNotFoundError(f"could not resolve the USB device owning {serial_device}")
+
+
+def reset_usb_device(serial_device: str) -> str:
+    """Reset the one USB device that owns the configured tty, never its parent hub."""
+    node = usb_device_node(serial_device)
+    descriptor = os.open(node, os.O_WRONLY)
+    try:
+        fcntl.ioctl(descriptor, USBDEVFS_RESET, 0)
+    finally:
+        os.close(descriptor)
+    return node
 
 
 def discover_devices(pattern: str = "") -> list[str]:
@@ -55,10 +85,14 @@ class SerialTransport:
         self.coalesced_frames = 0
         self.discarded_frames = 0
         self.forced_reconnects = 0
+        self.usb_resets = 0
+        self.usb_reset_failures = 0
+        self.last_usb_reset_error: str | None = None
         self._stop = threading.Event()
         self._connected = threading.Event()
         self._reconnect = threading.Event()
         self._reconnect_reason = ""
+        self._reconnect_usb_reset = False
         self._reconnect_lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
@@ -79,7 +113,7 @@ class SerialTransport:
         if self._thread:
             self._thread.join(timeout=max(2.0, self.config.read_timeout + 1.0))
 
-    def request_reconnect(self, reason: str) -> bool:
+    def request_reconnect(self, reason: str, *, usb_reset: bool = False) -> bool:
         """Ask the worker to close and reopen a connected serial device."""
         if not self._connected.is_set() or self._stop.is_set():
             return False
@@ -87,6 +121,7 @@ class SerialTransport:
             if self._reconnect.is_set():
                 return False
             self._reconnect_reason = reason
+            self._reconnect_usb_reset = usb_reset
             self._reconnect.set()
         return True
 
@@ -154,10 +189,24 @@ class SerialTransport:
                 if not self._stop.is_set():
                     with self._reconnect_lock:
                         reason = self._reconnect_reason or "serial reconnect requested"
+                        usb_reset = self._reconnect_usb_reset
                         self._reconnect_reason = ""
+                        self._reconnect_usb_reset = False
                     self.forced_reconnects += 1
                     LOG.warning("reopening serial transport: %s", reason)
                     self.on_state(False, None, reason)
+                    if usb_reset:
+                        try:
+                            node = reset_usb_device(device)
+                            self.usb_resets += 1
+                            self.last_usb_reset_error = None
+                            LOG.warning("reset scoped USB radio device %s", node)
+                        except (OSError, RuntimeError) as exc:
+                            self.usb_reset_failures += 1
+                            self.last_usb_reset_error = str(exc)
+                            LOG.error("could not reset USB radio device: %s", exc)
+                        if self.config.usb_reset_settle_seconds:
+                            self._stop.wait(self.config.usb_reset_settle_seconds)
             self._reconnect.clear()
             if not self._stop.wait(delay):
                 delay = min(self.config.reconnect_max, max(self.config.reconnect_initial, delay * 2))

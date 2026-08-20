@@ -51,7 +51,7 @@ class ProtocolEngine:
         self._pending: dict[int, PendingSend] = {}
         self._heartbeat_pending: dict[int, tuple[float, int]] = {}
         self._duplicates = DuplicateCache(config.duplicate_ttl, config.duplicate_cache_size)
-        self._next_heartbeat = self.clock()
+        self._next_heartbeat = self.clock() + config.heartbeat_phase
         self._last_state: str | None = None
         self._last_rx_seq: int | None = None
 
@@ -183,7 +183,17 @@ class ProtocolEngine:
             return
         sent_at, _ = pending
         self.metrics.rtt_ms = (now - sent_at) * 1000
-        self.metrics.heartbeat_results.append(True)
+        self._record_heartbeat(True)
+
+    def _record_heartbeat(self, success: bool) -> None:
+        self.metrics.record_heartbeat(
+            success,
+            degraded_rtt_ms=self.config.degraded_rtt_ms,
+            degraded_loss=self.config.degraded_loss,
+            minimum_samples=self.config.minimum_health_samples,
+            enter_samples=self.config.degraded_enter_samples,
+            exit_samples=self.config.degraded_exit_samples,
+        )
 
     def _send_control(self, msg_type: MessageType, payload: dict[str, Any]) -> None:
         self._send_frame(Frame(msg_type, 0, self._next_seq(), pack(payload)), priority=0)
@@ -242,18 +252,17 @@ class ProtocolEngine:
         """Forget state tied to a serial stream that is being reopened."""
         self.decoder = FrameDecoder(self.config.max_payload)
         self._heartbeat_pending.clear()
-        self.metrics.heartbeat_results.clear()
+        self.metrics.reset_link_quality()
         self.metrics.last_valid_rx = None
-        self.metrics.rtt_ms = None
         self._last_rx_seq = None
         self._last_state = None
 
     def _expire_heartbeats(self, now: float) -> None:
-        cutoff = now - self.config.heartbeat_interval
+        cutoff = now - self.config.heartbeat_reply_timeout
         expired = [seq for seq, (sent, _) in self._heartbeat_pending.items() if sent <= cutoff]
         for seq in expired:
             del self._heartbeat_pending[seq]
-            self.metrics.heartbeat_results.append(False)
+            self._record_heartbeat(False)
 
     def status(self, now: float | None = None) -> dict[str, Any]:
         return self.metrics.snapshot(

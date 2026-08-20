@@ -7,13 +7,23 @@ serial:
   reconnect_max: 5.0
   # Reopen a USB serial port that remains open but stops delivering valid RF frames.
   rf_silence_reopen_after: 15.0
+  # After one unsuccessful tty reopen, reset only the configured FTDI USB
+  # device. The udev rule in this repository grants the daemon permission.
+  usb_reset_after_reopens: 1
+  usb_reset_settle_seconds: 1.0
 protocol:
   max_payload: 256
   heartbeat_interval: 1.0
+  # Offset the Jetson heartbeat from the base to avoid synchronized half-duplex bursts.
+  heartbeat_phase: 0.5
+  heartbeat_reply_timeout: 2.0
   disconnect_after: 3.0
   degraded_rtt_ms: 500.0
   degraded_loss: 0.20
   loss_window: 30
+  minimum_health_samples: 5
+  degraded_enter_samples: 3
+  degraded_exit_samples: 5
   ack_timeout: 0.3
   max_retries: 3
   tx_queue_size: 256

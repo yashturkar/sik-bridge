@@ -138,3 +138,34 @@ def test_daemon_reopens_silent_serial_transport(tmp_path: Path):
             os.close(slave)
 
     asyncio.run(scenario())
+
+
+def test_silent_recovery_escalates_only_after_tty_reopen():
+    async def scenario():
+        config = AppConfig(
+            "test", SerialConfig(usb_reset_after_reopens=1), ProtocolConfig(), SocketConfig(),
+        )
+        daemon = SikLinkDaemon(config)
+        requests = []
+        daemon.transport.request_reconnect = lambda reason, **kwargs: (
+            requests.append((reason, kwargs.get("usb_reset", False))) or True
+        )
+        assert daemon._request_silent_recovery(15.0)
+        assert daemon._request_silent_recovery(30.0)
+        assert requests[0][1] is False
+        assert requests[1][1] is True
+        assert "scoped USB device reset" in requests[1][0]
+        assert daemon.engine.metrics.serial_recoveries == 2
+
+    asyncio.run(scenario())
+
+
+def test_invalid_serial_bytes_do_not_postpone_recovery():
+    async def scenario():
+        daemon = SikLinkDaemon(AppConfig("test", SerialConfig(), ProtocolConfig(), SocketConfig()))
+        daemon.engine.metrics.last_valid_rx = 10.0
+        daemon._serial_recovery_deadline = 99.0
+        daemon._receive(b"not a framed radio packet")
+        assert daemon._serial_recovery_deadline == 99.0
+
+    asyncio.run(scenario())
